@@ -6,11 +6,13 @@
 #include <libgen.h>
 #include <stdio.h>
 #include <SDL2/SDL_timer.h>
+#include <SDL2/SDL_platform.h>
 
 #include "config.h"
 #include "command.h"
 #include "util/log.h"
 #include "util/net.h"
+#include "util/str_util.h"
 
 #define SOCKET_NAME "scrcpy"
 #define SERVER_FILENAME "scrcpy-server"
@@ -18,20 +20,39 @@
 #define DEFAULT_SERVER_PATH PREFIX "/share/scrcpy/" SERVER_FILENAME
 #define DEVICE_SERVER_PATH "/data/local/tmp/scrcpy-server.jar"
 
-static const char *
+static char *
 get_server_path(void) {
+#ifdef __WINDOWS__
+    const wchar_t *server_path_env = _wgetenv(L"SCRCPY_SERVER_PATH");
+#else
     const char *server_path_env = getenv("SCRCPY_SERVER_PATH");
+#endif
     if (server_path_env) {
-        LOGD("Using SCRCPY_SERVER_PATH: %s", server_path_env);
         // if the envvar is set, use it
-        return server_path_env;
+#ifdef __WINDOWS__
+        char *server_path = utf8_from_wide_char(server_path_env);
+#else
+        char *server_path = SDL_strdup(server_path_env);
+#endif
+        if (!server_path) {
+            LOGE("Could not allocate memory");
+            return NULL;
+        }
+        LOGD("Using SCRCPY_SERVER_PATH: %s", server_path);
+        return server_path;
     }
 
 #ifndef PORTABLE
     LOGD("Using server: " DEFAULT_SERVER_PATH);
+    char *server_path = SDL_strdup(DEFAULT_SERVER_PATH);
+    if (!server_path) {
+        LOGE("Could not allocate memory");
+        return NULL;
+    }
     // the absolute path is hardcoded
-    return DEFAULT_SERVER_PATH;
+    return server_path;
 #else
+
     // use scrcpy-server in the same directory as the executable
     char *executable_path = get_executable_path();
     if (!executable_path) {
@@ -67,12 +88,17 @@ get_server_path(void) {
 
 static bool
 push_server(const char *serial) {
-    const char *server_path = get_server_path();
+    char *server_path = get_server_path();
+    if (!server_path) {
+        return false;
+    }
     if (!is_regular_file(server_path)) {
         LOGE("'%s' does not exist or is not a regular file\n", server_path);
+        SDL_free(server_path);
         return false;
     }
     process_t process = adb_push(serial, server_path, DEVICE_SERVER_PATH);
+    SDL_free(server_path);
     return process_check_success(process, "adb push");
 }
 
